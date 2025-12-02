@@ -46,11 +46,6 @@ python_binary_host {
     srcs: [
         "treble_sepolicy_tests.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: [
         "mini_cil_parser",
     ],
@@ -61,11 +56,6 @@ python_binary_host {
     srcs: [
         "sepolicy_tests.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: ["pysepolwrap"],
     data: [":libsepolwrap"],
 }
@@ -75,14 +65,11 @@ python_binary_host {
     srcs: [
         "apex_sepolicy_tests.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: ["pysepolwrap"],
     data: [
         ":libsepolwrap",
+    ],
+    device_common_data: [
         ":precompiled_sepolicy",
     ],
 }
@@ -96,15 +83,12 @@ python_test_host {
     libs: ["pysepolwrap"],
     data: [
         ":libsepolwrap",
+    ],
+    device_common_data: [
         ":precompiled_sepolicy",
     ],
     test_options: {
         unit_test: true,
-    },
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
     },
 }
 
@@ -153,11 +137,6 @@ python_binary_host {
     srcs: [
         "sepolicy_freeze_test.py",
     ],
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
     libs: [
         "mini_cil_parser",
     ],
@@ -173,16 +152,24 @@ python_test_host {
     test_options: {
         unit_test: true,
     },
-    version: {
-        py3: {
-            embedded_launcher: true,
-        },
-    },
+}
+
+python_binary_host {
+    name: "treble_labeling_tests",
+    srcs: ["treble_labeling_tests.py"],
+    libs: [
+        "pysepolwrap",
+        "pyyaml",
+    ],
+    data: [":libsepolwrap"],
 }
 
 // prebuilt files to be included to CTS
 filegroup {
     name: "prebuilt_sepolicy_cts_data",
-    srcs: [":202404_sepolicy_cts_data"],
+    srcs: [
+        ":202404_sepolicy_cts_data",
+        ":202504_sepolicy_cts_data",
+    ],
     visibility: ["//cts/hostsidetests/security"],
 }

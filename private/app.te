@@ -6,6 +6,7 @@ r_dir_file({
   appdomain
   -ephemeral_app
   -isolated_app_all
+  -network_stack
   -platform_app
   -priv_app
   -shell
@@ -19,6 +20,7 @@ userdebug_or_eng(`
     appdomain
     -ephemeral_app
     -isolated_app_all
+    -network_stack
     -platform_app
     -priv_app
     -shell
@@ -155,17 +157,34 @@ allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } media_rw_d
 allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } usb_device:chr_file { read write getattr ioctl };
 allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } usbaccessory_device:chr_file { read write getattr };
 
+# Allow apps to use serial ports. The serial ports are opened by the native serial service and passed through system_server to apps.
+# Only allow IOCTL operations in ioctl_tty(2). Also exclude those that require CAP_SYS_ADMIN and those in "Controlling terminal",
+# "Process group and session ID" and "Pseudoterminal ioctls" sections.
+starting_at_board_api(202602, `
+    allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } serialservice:fd use;
+    allow {
+        appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all
+    } { serial_device usb_serial_device }:chr_file { read write getattr ioctl };
+    allowxperm {
+        appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all
+    } { serial_device usb_serial_device }:chr_file ioctl unpriv_serial_ioctls;
+')
+
 #logd access
 control_logd({ appdomain -ephemeral_app -sdk_sandbox_all })
 
 # application inherit logd write socket (urge is to deprecate this long term)
-allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } keystore:keystore2_key { delete use get_info rebind update };
+allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } keystore:keystore2_key { delete use get_info grant rebind update };
 
 allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } keystore_maintenance_service:service_manager find;
 
 use_keystore({ appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all })
 
 use_credstore({ appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all })
+
+use_omapi({ appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all })
+
+allow { appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all } persistent_data_block_service:service_manager find;
 
 # For app fuse.
 pdx_client({ appdomain -isolated_app_all -ephemeral_app -sdk_sandbox_all }, display_client)
@@ -188,9 +207,13 @@ allow appdomain { ashmem_device ashmem_libcutils_device }:chr_file execute;
 
 # Receive and use open file descriptors inherited from zygote.
 allow appdomain zygote:fd use;
+allow appdomain zygote_next:fd use;
 
 # Receive and use open file descriptors inherited from app zygote.
 allow appdomain app_zygote:fd use;
+
+# app_zygote creates memfds and shares them via fork(2) or binder IPC
+allow appdomain app_zygote_tmpfs:file { read write getattr map };
 
 # gdbserver for ndk-gdb reads the zygote.
 # valgrind needs mmap exec for zygote
@@ -367,7 +390,7 @@ unix_socket_send(appdomain, statsdw, statsd)
 
 # Write profiles /data/misc/profiles
 allow appdomain user_profile_root_file:dir search;
-allow appdomain user_profile_data_file:dir w_dir_perms;
+allow appdomain user_profile_data_file:dir rw_dir_perms;
 allow appdomain user_profile_data_file:file create_file_perms;
 
 # Allow writing performance tracing data into the perfetto traced daemon.
@@ -446,6 +469,7 @@ allow appdomain resourcecache_data_file:dir r_dir_perms;
 read_logd(appdomain)
 
 allow appdomain zygote:unix_dgram_socket write;
+allow appdomain zygote_next:unix_dgram_socket write;
 
 allow appdomain console_device:chr_file { read write };
 
@@ -488,6 +512,8 @@ allow appdomain app_fuse_file:file { getattr read append write map };
 allow appdomain runas_exec:file getattr;
 # Others are either allowed elsewhere or not desired.
 
+get_prop(appdomain, high_barometer_quality_prop)
+
 # Connect to adbd and use a socket transferred from it.
 # This is used for e.g. adb backup/restore.
 allow appdomain adbd:unix_stream_socket connectto;
@@ -514,8 +540,9 @@ allow appdomain zygote_tmpfs:file { map read };
 ###
 
 # Superuser capabilities.
-# bluetooth requires net_admin and wake_alarm. network stack app requires net_admin.
-neverallow { appdomain -bluetooth -network_stack } self:capability_class_set *;
+# bluetooth requires net_admin and wake_alarm. network stack app requires net_admin. nfc requires
+# block_suspend.
+neverallow { appdomain -bluetooth -network_stack -nfc } self:capability_class_set *;
 
 # Block device access.
 neverallow appdomain dev_type:blk_file { read write };
@@ -580,7 +607,8 @@ neverallow { appdomain -shell } { domain -appdomain }:file no_rw_file_perms;
 # All others prohibited.
 # -perfetto is to allow shell (which is an appdomain) to kill perfetto
 # (see private/shell.te).
-neverallow appdomain { domain -appdomain -perfetto }:process
+# -crosvm is to allow owner of a VM to kill VM they own.
+neverallow appdomain { domain -appdomain -perfetto -crosvm }:process
     { sigkill sigstop signal };
 
 # Write to rootfs.
@@ -603,6 +631,8 @@ neverallow appdomain system_data_file:dir_file_class_set
     { create write setattr relabelfrom relabelto append unlink link rename };
 
 # Write to various other parts of /data.
+neverallow appdomain mediadrm_system_data_file:dir_file_class_set
+    { create write setattr relabelfrom relabelto append unlink link rename };
 neverallow appdomain drm_data_file:dir_file_class_set
     { create write setattr relabelfrom relabelto append unlink link rename };
 neverallow { appdomain -platform_app }
@@ -638,12 +668,6 @@ neverallow appdomain
 neverallow { appdomain -platform_app }
     apk_tmp_file:dir_file_class_set
     { create write setattr relabelfrom relabelto append unlink link rename };
-
-neverallow { appdomain -untrusted_app_all -platform_app -priv_app -isolated_app_all }
-    { apk_tmp_file apk_private_tmp_file }:dir_file_class_set *;
-
-neverallow { untrusted_app_all isolated_app_all } { apk_tmp_file apk_private_tmp_file }:{ devfile_class_set dir fifo_file lnk_file sock_file } *;
-neverallow { untrusted_app_all isolated_app_all } { apk_tmp_file apk_private_tmp_file }:file ~{ getattr read map };
 
 # Access to factory files.
 neverallow appdomain efs_file:dir_file_class_set write;
@@ -812,3 +836,9 @@ is_flag_enabled(RELEASE_UNLOCKED_STORAGE_API, `
     -sdk_sandbox_all
   } storage_area_dir:{ notdevfile_class_set dir } storage_area_content_file;
 ')
+
+# Apps should not be able to open trace data files, they should depend upon traceur to pass a file descriptor.
+# 'write' is granted to allow apps to write heap dumps.
+allow appdomain trace_data_file:file { read write getattr };
+neverallow { appdomain -traceur_app -platform_app -system_app -shell } trace_data_file:file ~{ read write getattr };
+neverallow { appdomain -traceur_app -platform_app -system_app -shell } trace_data_file:dir *;

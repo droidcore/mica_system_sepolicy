@@ -20,6 +20,7 @@ import glob
 import logging
 import mini_parser
 import os
+import pkgutil
 import policy
 import shutil
 import subprocess
@@ -55,11 +56,6 @@ def check_run(cmd, cwd=None):
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
-def check_output(cmd):
-    logging.debug('Running cmd: %s' % cmd)
-    return subprocess.run(cmd, check=True, stdout=subprocess.PIPE)
-
-
 def get_android_build_top():
     ANDROID_BUILD_TOP = os.getenv('ANDROID_BUILD_TOP')
     if not ANDROID_BUILD_TOP:
@@ -69,115 +65,11 @@ def get_android_build_top():
     return ANDROID_BUILD_TOP
 
 
-def fetch_artifact(branch, build, pattern, destination='.'):
-    """Fetches build artifacts from Android Build server.
-
-    Args:
-      branch: string, branch to pull build artifacts from
-      build: string, build ID or "latest"
-      pattern: string, pattern of build artifact file name
-      destination: string, destination to pull build artifact to
-    """
-    fetch_artifact_path = '/google/data/ro/projects/android/fetch_artifact'
-    cmd = [
-        fetch_artifact_path, '--branch', branch, '--target',
-        'aosp_arm64-userdebug'
-    ]
-    if build == 'latest':
-        cmd.append('--latest')
-    else:
-        cmd.extend(['--bid', build])
-    cmd.extend([pattern, destination])
-    check_run(cmd)
-
-
-def extract_mapping_file_from_img(img_path, ver, destination='.'):
-    """ Extracts system/etc/selinux/mapping/{ver}.cil from system.img file.
-
-    Args:
-      img_path: string, path to system.img file
-      ver: string, version of designated mapping file
-      destination: string, destination to pull the mapping file to
-
-    Returns:
-      string, path to extracted mapping file
-    """
-
-    cmd = [
-        'debugfs', '-R',
-        'cat system/etc/selinux/mapping/10000.0.cil', img_path
-    ]
-    path = os.path.join(destination, '%s.cil' % ver)
-    with open(path, 'wb') as f:
-        logging.debug('Extracting %s.cil to %s' % (ver, destination))
-        f.write(check_output(cmd).stdout.replace(b'10000_0', ver.replace('.', '_').encode()))
-    return path
-
-
-def download_mapping_file(branch, build, ver, destination='.'):
-    """ Downloads system/etc/selinux/mapping/{ver}.cil from Android Build server.
-
-    Args:
-      branch: string, branch to pull build artifacts from (e.g. "sc-v2-dev")
-      build: string, build ID or "latest"
-      ver: string, version of designated mapping file (e.g. "32.0")
-      destination: string, destination to pull build artifact to
-
-    Returns:
-      string, path to extracted mapping file
-    """
-    logging.info('Downloading %s mapping file from branch %s build %s...' %
-                 (ver, branch, build))
-    artifact_pattern = 'aosp_arm64-img-*.zip'
-    fetch_artifact(branch, build, artifact_pattern, temp_dir)
-
-    # glob must succeed
-    zip_path = glob.glob(os.path.join(temp_dir, artifact_pattern))[0]
-    with zipfile.ZipFile(zip_path) as zip_file:
-        logging.debug('Extracting system.img to %s' % temp_dir)
-        zip_file.extract('system.img', temp_dir)
-
-    system_img_path = os.path.join(temp_dir, 'system.img')
-    return extract_mapping_file_from_img(system_img_path, ver, destination)
-
-
-def build_base_files(target_version):
-    """ Builds needed base policy files from the source code.
-
-    Args:
-      target_version: string, target version to gerenate the mapping file
-
-    Returns:
-      (string, string, string), paths to base policy, old policy, and pub policy
-      cil
-    """
-    logging.info('building base sepolicy files')
-    build_top = get_android_build_top()
-
-    cmd = [
-        'build/soong/soong_ui.bash',
-        '--make-mode',
-        'dist',
-        'base-sepolicy-files-for-mapping',
-        'TARGET_PRODUCT=aosp_arm64',
-        'TARGET_BUILD_VARIANT=userdebug',
-    ]
-    check_run(cmd, cwd=build_top)
-
-    dist_dir = os.path.join(build_top, 'out', 'dist')
-    base_policy_path = os.path.join(dist_dir, 'base_plat_sepolicy')
-    old_policy_path = os.path.join(dist_dir,
-                                   '%s_plat_sepolicy' % target_version)
-    pub_policy_cil_path = os.path.join(dist_dir, 'base_plat_pub_policy.cil')
-
-    return base_policy_path, old_policy_path, pub_policy_cil_path
-
-
 def change_api_level(versioned_type, api_from, api_to):
     """ Verifies the API version of versioned_type, and changes it to new API level.
 
-    For example, change_api_level("foo_32_0", "32.0", "31.0") will return
-    "foo_31_0".
+    For example, change_api_level("foo_202404", "202404", "202504") will return
+    "foo_202504".
 
     Args:
       versioned_type: string, type with version suffix
@@ -187,12 +79,10 @@ def change_api_level(versioned_type, api_from, api_to):
     Returns:
       string, a new versioned type
     """
-    old_suffix = api_from.replace('.', '_')
-    new_suffix = api_to.replace('.', '_')
-    if not versioned_type.endswith(old_suffix):
+    if not versioned_type.endswith(api_from):
         raise ValueError('Version of type %s is different from %s' %
                          (versioned_type, api_from))
-    return versioned_type.removesuffix(old_suffix) + new_suffix
+    return versioned_type.removesuffix(api_from) + api_to
 
 
 def create_target_compat_modules(bp_path, target_ver):
@@ -322,18 +212,21 @@ def patch_top_half_of_latest_compat_modules(bp_path, latest_ver, target_ver):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--branch',
-        required=True,
-        help='Branch to pull build from. e.g. "sc-v2-dev"')
-    parser.add_argument('--build', required=True, help='Build ID, or "latest"')
-    parser.add_argument(
         '--target-version',
         required=True,
-        help='Target version of designated mapping file. e.g. "32.0"')
+        help='Target version of designated mapping file. e.g. "202504"')
     parser.add_argument(
-        '--latest-version',
-        required=True,
-        help='Latest version for mapping of newer types. e.g. "31.0"')
+        '--plat-mapping-file',
+        help='Path to the plat_mapping_file.')
+    parser.add_argument(
+        '--base-plat-sepolicy',
+        help='Path to the latest compiled base platform sepolicy.')
+    parser.add_argument(
+        '--old-plat-sepolicy',
+        help='Path to the earlier version of compiled base platform speolicy.')
+    parser.add_argument(
+        '--base-plat-pub-policy',
+        help='Path to base_plat_pub_policy.cil.')
     parser.add_argument(
         '-v',
         '--verbose',
@@ -355,21 +248,26 @@ def main():
     temp_dir = tempfile.mkdtemp()
 
     try:
-        libpath = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), 'libsepolwrap' + SHARED_LIB_EXTENSION)
-        if not os.path.exists(libpath):
-            sys.exit(
-                'Error: libsepolwrap does not exist. Is this binary corrupted?\n'
-            )
+        libname = "libsepolwrap" + SHARED_LIB_EXTENSION
+        libpath = os.path.join(temp_dir, libname)
+        with open(libpath, "wb") as f:
+            blob = pkgutil.get_data("sepolicy_generate_compat", libname)
+            if not blob:
+                sys.exit("Error: libsepolwrap does not exist. Is this binary corrupted?\n")
+            f.write(blob)
 
         build_top = get_android_build_top()
         sepolicy_path = os.path.join(build_top, 'system', 'sepolicy')
 
         # Step 0. Create a placeholder files and compat modules
-        # These are needed to build base policy files below.
         compat_bp_path = os.path.join(sepolicy_path, 'compat', 'Android.bp')
         create_target_compat_modules(compat_bp_path, args.target_version)
-        patch_top_half_of_latest_compat_modules(compat_bp_path, args.latest_version,
+
+        # format of ver is YYYY04
+        # prev version will be ver - 100. this is not perfect but simplest
+        # the type is deliberately str for convenience
+        latest_version = str(int(args.target_version) - 100)
+        patch_top_half_of_latest_compat_modules(compat_bp_path, latest_version,
             args.target_version)
 
         target_compat_path = os.path.join(sepolicy_path, 'private', 'compat',
@@ -385,19 +283,15 @@ def main():
         Path(target_compat_file).touch()
         Path(target_ignore_file).touch()
 
-        # Step 1. Download system/etc/selinux/mapping/{ver}.cil, and remove types/typeattributes
-        mapping_file = download_mapping_file(
-            args.branch, args.build, args.target_version, destination=temp_dir)
-        mapping_file_cil = mini_parser.MiniCilParser(mapping_file)
+        # Step 1. Remove types/typeattributes from the mapping file
+        mapping_file_cil = mini_parser.MiniCilParser(args.plat_mapping_file)
         mapping_file_cil.types = set()
         mapping_file_cil.typeattributes = set()
 
-        # Step 2. Build base policy files and parse latest mapping files
-        base_policy_path, old_policy_path, pub_policy_cil_path = build_base_files(
-            args.target_version)
-        base_policy = policy.Policy(base_policy_path, None, libpath)
-        old_policy = policy.Policy(old_policy_path, None, libpath)
-        pub_policy_cil = mini_parser.MiniCilParser(pub_policy_cil_path)
+        # Step 2. Parse plat sepolicy and latest mapping files
+        base_policy = policy.Policy(args.base_plat_sepolicy, None, libpath)
+        old_policy = policy.Policy(args.old_plat_sepolicy, None, libpath)
+        pub_policy_cil = mini_parser.MiniCilParser(args.base_plat_pub_policy)
 
         all_types = base_policy.GetAllTypes(False)
         old_all_types = old_policy.GetAllTypes(False)
@@ -413,12 +307,12 @@ def main():
 
         # Step 4. Map new types and removed types appropriately, based on the latest mapping
         latest_compat_path = os.path.join(sepolicy_path, 'private', 'compat',
-                                          args.latest_version)
+                                          latest_version)
         latest_mapping_cil = mini_parser.MiniCilParser(
-            os.path.join(latest_compat_path, args.latest_version + '.cil'))
+            os.path.join(latest_compat_path, latest_version + '.cil'))
         latest_ignore_cil = mini_parser.MiniCilParser(
             os.path.join(latest_compat_path,
-                         args.latest_version + '.ignore.cil'))
+                         latest_version + '.ignore.cil'))
 
         latest_ignored_types = list(latest_ignore_cil.rTypeattributesets.keys())
         latest_removed_types = latest_mapping_cil.types
@@ -442,7 +336,7 @@ def main():
             elif new_type in latest_mapping_cil.rTypeattributesets:
                 latest_mapped_types = latest_mapping_cil.rTypeattributesets[
                     new_type]
-                target_mapped_types = {change_api_level(t, args.latest_version,
+                target_mapped_types = {change_api_level(t, latest_version,
                                         args.target_version)
                        for t in latest_mapped_types}
                 logging.debug('mapping %s to %s' %
@@ -507,6 +401,9 @@ def main():
             logging.info('writing %s' % target_ignore_file)
             f.write(ignore_cil_template %
                     (args.target_version, '\n    '.join(sorted(target_ignored_types))))
+
+        # TODO(b/391513934): add treble tests
+        # TODO(b/391513934): add mapping files to phony modules like selinux_policy_system
     finally:
         logging.info('Deleting temporary dir: {}'.format(temp_dir))
         shutil.rmtree(temp_dir)

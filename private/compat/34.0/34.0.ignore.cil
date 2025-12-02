@@ -19,10 +19,10 @@
     hal_secretkeeper_service
     hal_codec2_service
     hal_macsec_service
+    hal_mediaquality_service
     hal_remotelyprovisionedcomponent_avf_service
     hal_threadnetwork_service
     hidl_memory_prop
-    hidraw_device
     input_device_config_prop
     virtual_camera_service
     ot_daemon_service
@@ -32,6 +32,7 @@
     security_state_service
     sensitive_content_protection_service
     setupwizard_mode_prop
+    supervision_service
     sysfs_sync_on_suspend
     tv_ad_service
     threadnetwork_service
@@ -51,4 +52,5 @@
     aconfigd_socket
     enable_16k_pages_prop
     proc_cgroups
+    media_quality_service
   ))

@@ -34,7 +34,6 @@ userdebug_or_eng(`
 ')
 
 r_dir_file(dumpstate, aconfig_storage_metadata_file);
-r_dir_file(dumpstate, aconfig_test_mission_files);
 
 # Allow dumpstate to make binder calls to incidentd
 binder_call(dumpstate, incidentd)
@@ -68,6 +67,9 @@ binder_call(dumpstate, virtual_camera)
 # Allow dumpstate to talk to ot_daemon service over binder
 binder_call(dumpstate, ot_daemon)
 
+# Allow dumpstate to talk to mmd service over binder
+binder_call(dumpstate, mmd)
+
 # Collect metrics on boot time created by init
 get_prop(dumpstate, boottime_prop)
 
@@ -88,6 +90,9 @@ userdebug_or_eng(`
 ')
 dontaudit dumpstate keystore:process { signal };
 
+# Allow dumpstate to talk to rkp_cert_processor process
+binder_call(dumpstate, rkp_cert_processor)
+
 # For collecting bugreports.
 no_debugfs_restriction(`
   allow dumpstate debugfs_wakeup_sources:file r_file_perms;
@@ -104,9 +109,6 @@ allow dumpstate {
   proc_net_tcp_udp
   proc_pid_max
 }:file r_file_perms;
-
-# For comminucating with the system process to do confirmation ui.
-binder_call(dumpstate, incidentcompanion_service)
 
 # Set properties.
 # dumpstate_prop is used to share state with the Shell app.
@@ -277,6 +279,7 @@ allow dumpstate {
   sysfs_devices_block
   sysfs_dm
   sysfs_loop
+  sysfs_lru_gen_enabled
   sysfs_usb
   sysfs_zram
 }:file r_file_perms;
@@ -348,6 +351,7 @@ dump_hal(hal_secretkeeper)
 dump_hal(hal_sensors)
 dump_hal(hal_thermal)
 dump_hal(hal_vehicle)
+dump_hal(hal_vm_capabilities)
 dump_hal(hal_weaver)
 dump_hal(hal_wifi)
 
@@ -373,6 +377,7 @@ allow dumpstate zygote_exec:file rx_file_perms;
 allow dumpstate bluetooth_data_file:dir search;
 allow dumpstate bluetooth_logs_data_file:dir r_dir_perms;
 allow dumpstate bluetooth_logs_data_file:file r_file_perms;
+allow dumpstate bluetooth_logs_data_file:lnk_file r_file_perms;
 
 # For Nfc
 allow dumpstate nfc_logs_data_file:dir r_dir_perms;
@@ -395,9 +400,11 @@ read_runtime_log_tags(dumpstate)
 
 # Read files in /proc
 allow dumpstate {
+  proc_allocinfo
   proc_bootconfig
   proc_buddyinfo
   proc_cmdline
+  proc_cgroups
   proc_meminfo
   proc_modules
   proc_net_type
@@ -416,7 +423,12 @@ allow dumpstate net_data_file:dir search;
 allow dumpstate net_data_file:file r_file_perms;
 
 # List sockets via ss.
-allow dumpstate self:netlink_tcpdiag_socket { create_socket_perms_no_ioctl nlmsg_read };
+allow dumpstate self:netlink_tcpdiag_socket create_socket_perms_no_ioctl;
+# For kernel < 6.13
+allow dumpstate self:netlink_tcpdiag_socket nlmsg_read;
+# For kernel >= 6.13
+allow dumpstate self:netlink_tcpdiag_socket nlmsg;
+allowxperm dumpstate self:netlink_tcpdiag_socket nlmsg SOCK_DIAG_BY_FAMILY;
 
 # Access /data/tombstones.
 allow dumpstate tombstone_data_file:dir r_dir_perms;
@@ -462,8 +474,14 @@ allow dumpstate {
   -hal_service_type
   -virtual_touchpad_service
   -vold_service
+  -fwk_vold_service
   -default_android_service
 }:service_manager find;
+starting_at_board_api(202604, `
+    neverallow dumpstate {
+      vold
+    }:binder call;
+')
 # suppress denials for services dumpstate should not be accessing.
 dontaudit dumpstate {
   apex_service
@@ -472,7 +490,11 @@ dontaudit dumpstate {
   hal_service_type
   virtual_touchpad_service
   vold_service
+  fwk_vold_service
 }:service_manager find;
+dontaudit dumpstate {
+  vold
+}:binder call;
 
 # Most of these are neverallowed.
 dontaudit dumpstate hwservice_manager_type:hwservice_manager find;
@@ -512,7 +534,12 @@ allow dumpstate proc_pid_max:file r_file_perms;
 binder_call(dumpstate, installd);
 
 # Allow dumpstate to run ip xfrm policy
-allow dumpstate self:netlink_xfrm_socket { create_socket_perms_no_ioctl nlmsg_read };
+allow dumpstate self:netlink_xfrm_socket create_socket_perms_no_ioctl;
+# For kernel < 6.13
+allow dumpstate self:netlink_xfrm_socket nlmsg_read;
+# For kernel >= 6.13
+allow dumpstate self:netlink_xfrm_socket nlmsg;
+allowxperm dumpstate self:netlink_xfrm_socket nlmsg XFRM_MSG_GETPOLICY;
 
 # Allow dumpstate to run iotop
 allow dumpstate self:netlink_socket create_socket_perms_no_ioctl;
@@ -540,6 +567,9 @@ dontaudit dumpstate {
   vm_data_file
 }:dir getattr;
 
+# Allow dumpstate to dump VMs
+binder_call(dumpstate, virtualizationservice)
+
 # Allow dumpstate to talk to bufferhubd over binder
 binder_call(dumpstate, bufferhubd);
 
@@ -561,6 +591,9 @@ use_apex_info(dumpstate)
 # Allow reading files under /data/system/shutdown-checkpoints/
 allow dumpstate shutdown_checkpoints_system_data_file:dir r_dir_perms;
 allow dumpstate shutdown_checkpoints_system_data_file:file r_file_perms;
+
+# Allow dumpstate to make binder calls to wifi_mainline_supplicant
+binder_call(dumpstate, wifi_mainline_supplicant);
 
 ###
 ### neverallow rules

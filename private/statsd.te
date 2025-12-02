@@ -41,6 +41,12 @@ allow statsd uprobestats_configs_data_file:file create_file_perms;
 
 # Allow statsd to trigger uprobestats via property.
 set_prop(statsd, uprobestats_start_with_config_prop);
+
+# Allow statsd to use io_uring
+io_uring_use(statsd)
+
+# Allow statsd to start the uprobestats service.
+set_prop(statsd, ctl_uprobestats_prop)
 binder_use(statsd)
 
 # Allow statsd to scan through /proc/pid for all processes.
@@ -70,6 +76,30 @@ allow statsd stats_data_file:file create_file_perms;
 allow statsd stats_config_data_file:dir create_dir_perms;
 allow statsd stats_config_data_file:file create_file_perms;
 
+allow statsd statsd_atoms_list_file:dir create_dir_perms;
+allow statsd statsd_atoms_list_file:file create_file_perms;
+
+# Allow all processes to check statsd atoms in use list file.
+allow {
+  coredomain
+  # Except
+  -mediaextractor
+  -perfetto
+  -traced
+  -traced_probes
+} statsd_atoms_list_file:dir r_dir_perms;
+allow {
+  coredomain
+  # Except
+  -mediaextractor
+  -perfetto
+  -traced
+  -traced_probes
+} statsd_atoms_list_file:file r_file_perms;
+
+set_prop(statsd, statsd_atoms_list_version_prop)
+get_prop(coredomain, statsd_atoms_list_version_prop)
+
 # Allow statsd to make binder calls to any binder service.
 binder_call(statsd, appdomain)
 binder_call(statsd, incidentd)
@@ -91,6 +121,10 @@ binder_call(statsd, mediametrics)
 # Allow statsd to interact with mediametrics
 allow statsd mediaserver_service:service_manager find;
 binder_call(statsd, mediaserver)
+
+# Allow statsd to interact with mmd
+allow statsd mmd_service:service_manager find;
+binder_call(statsd, mmd)
 
 # Allow logd access.
 read_logd(statsd)
@@ -138,3 +172,16 @@ neverallow { domain -statsd -system_server -init -vold } stats_config_data_file:
 # Limited access to the directory itself.
 neverallow { domain -statsd -init -vold } stats_data_file:dir *;
 neverallow { domain -statsd -system_server -init -vold } stats_config_data_file:dir *;
+
+# Limited access atom ids file.
+neverallow {
+  domain
+  -statsd
+  -init
+} statsd_atoms_list_file:file {no_w_file_perms no_x_file_perms};
+
+neverallow {
+  domain
+  -statsd
+  -init
+} statsd_atoms_list_file:dir no_w_file_perms;

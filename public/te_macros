@@ -1,3 +1,4 @@
+divert(-1)
 #####################################
 # domain_trans(olddomain, type, newdomain)
 # Allow a transition from olddomain to newdomain
@@ -75,7 +76,8 @@ allow $1 $2:{ file lnk_file } r_file_perms;
 # Allow access to a unique type for this domain when creating tmpfs / ashmem files.
 define(`tmpfs_domain', `
 type_transition $1 tmpfs:file $1_tmpfs;
-allow $1 $1_tmpfs:file { read write getattr map };
+allow $1 $1_tmpfs:file { read write getattr map ioctl relabelfrom };
+allowxperm $1 $1_tmpfs:file ioctl ashmem_ioctls;
 ')
 
 # pdx macros for IPC. pdx is a high-level name which contains transport-specific
@@ -201,6 +203,42 @@ allow $1 virtualizationmanager:vsock_socket { getattr getopt read write };
 get_prop($1, hypervisor_prop)
 # Allow client to read (but not open) the crashdump provided by virtualizationmanager
 allow $1 virtualizationservice_data_file:file { getattr read };
+# Allow virtualizationmanager to read the path of the client using /proc/{PID}/exe
+allow virtualizationmanager $1:dir search;
+allow virtualizationmanager $1:file read;
+allow virtualizationmanager $1:lnk_file read;
+
+# Allow owner of a VM to kill the VM forcibly, by sending sigkill to the process group
+# where virtmgr is the leader
+allow $1 crosvm:process sigkill;
+')
+
+####################################
+# early_virtmgr_use(domain)
+# Allow domain to create and communicate with an early virtual machine using
+# early_virtmgr.
+define(`early_virtmgr_use', `
+# Transition to early_virtmgr when the client executes it.
+domain_auto_trans($1, early_virtmgr_exec, early_virtmgr)
+# Allow early_virtmgr to communicate over UDS with the client.
+allow { early_virtmgr crosvm } $1:unix_stream_socket { ioctl getattr read write };
+# Let the client pass file descriptors to early_virtmgr and on to crosvm.
+allow { early_virtmgr crosvm } $1:fd use;
+allow { early_virtmgr crosvm } $1_tmpfs:file rw_file_perms;
+# Let the client use file descriptors created by early_virtmgr.
+allow $1 early_virtmgr:fd use;
+# Allow piping console log to the client
+allow { early_virtmgr crosvm } $1:fifo_file { ioctl getattr read write };
+# Allow client to read/write vsock created by early_virtmgr to communicate with the VM
+# that it created. Notice that we do not grant permission to create a vsock;
+# the client can only connect to VMs that it owns.
+allow $1 early_virtmgr:vsock_socket { getattr getopt read write };
+# Allow client to inspect hypervisor capabilities
+get_prop($1, hypervisor_prop)
+# Allow early_virtmgr to read the path of the client using /proc/{PID}/exe
+allow early_virtmgr $1:dir search;
+allow early_virtmgr $1:file read;
+allow early_virtmgr $1:lnk_file read;
 ')
 
 #####################################
@@ -211,7 +249,8 @@ typeattribute $1 appdomain;
 # Label tmpfs objects for all apps.
 type_transition $1 tmpfs:file appdomain_tmpfs;
 userfaultfd_use($1)
-allow $1 appdomain_tmpfs:file { execute getattr map read write };
+allow $1 appdomain_tmpfs:file { execute getattr map read write ioctl relabelfrom };
+allowxperm $1 appdomain_tmpfs:file ioctl ashmem_ioctls;
 neverallow { $1 -runas_app -shell -simpleperf } { domain -$1 }:file no_rw_file_perms;
 neverallow { appdomain -runas_app -shell -simpleperf -$1 } $1:file no_rw_file_perms;
 # The Android security model guarantees the confidentiality and integrity
@@ -388,10 +427,6 @@ define(`binder_use', `
 allow $1 servicemanager:binder { call transfer };
 # Allow servicemanager to send out callbacks
 allow servicemanager $1:binder { call transfer };
-# servicemanager performs getpidcon on clients.
-allow servicemanager $1:dir search;
-allow servicemanager $1:file { read open };
-allow servicemanager $1:process getattr;
 # rw access to /dev/binder and /dev/ashmem is presently granted to
 # all domains in domain.te.
 ')
@@ -404,10 +439,6 @@ define(`hwbinder_use', `
 allow $1 hwservicemanager:binder { call transfer };
 # Allow hwservicemanager to send out callbacks
 allow hwservicemanager $1:binder { call transfer };
-# hwservicemanager performs getpidcon on clients.
-allow hwservicemanager $1:dir search;
-allow hwservicemanager $1:file { read open map };
-allow hwservicemanager $1:process getattr;
 # rw access to /dev/hwbinder and /dev/ashmem is presently granted to
 # all domains in domain.te.
 ')
@@ -420,10 +451,6 @@ define(`vndbinder_use', `
 allow $1 vndbinder_device:chr_file rw_file_perms;
 # Call the vndservicemanager and transfer references to it.
 allow $1 vndservicemanager:binder { call transfer };
-# vndservicemanager performs getpidcon on clients.
-allow vndservicemanager $1:dir search;
-allow vndservicemanager $1:file { read open map };
-allow vndservicemanager $1:process getattr;
 ')
 
 #####################################
@@ -577,7 +604,10 @@ define(`not_compatible_property', ifelse(target_compatible_property, `true', , $
 # Userdebug or eng builds
 # SELinux rules which apply only to userdebug or eng builds
 #
-define(`userdebug_or_eng', ifelse(target_build_variant, `eng', $1, ifelse(target_build_variant, `userdebug', $1)))
+define(`userdebug_or_eng', ifelse(target_build_variant, `eng', $1, ifelse(target_build_variant, `userdebug', $1,
+#
+# SUPPRESSED_BY_USERDEBUG_OR_ENG -- this marker is used by CTS -- do not modify
+)))
 
 #####################################
 # asan builds
@@ -596,6 +626,18 @@ define(`with_native_coverage', ifelse(target_with_native_coverage, `true', userd
 # SELinux rules which are verified during build, but not as part of *TS testing.
 #
 define(`build_test_only', ifelse(target_exclude_build_test, `true', , $1))
+
+#####################################
+# On physical devices
+# SELinux neverallow assertions that are enforced only on physical devices. It
+# can be used to support special requirements for virtual devices. This is
+# equivalent to the @RequiresDevice annotation in CTS.
+#
+define(`on_physical_device',
+# BEGIN_PHYSICAL_DEVICE_ONLY -- this marker is used by CTS -- do not modify
+$1
+# END_PHYSICAL_DEVICE_ONLY -- this marker is used by CTS -- do not modify
+)
 
 ####################################
 # Fallback crash handling for processes that can't exec crash_dump (e.g. because of seccomp).
@@ -661,12 +703,7 @@ unix_socket_connect($1, logd, logd)
 #####################################
 # use_keystore(domain)
 # Ability to use keystore.
-# Keystore is requires the following permissions
-# to call getpidcon.
 define(`use_keystore', `
-  allow keystore $1:dir search;
-  allow keystore $1:file { read open };
-  allow keystore $1:process getattr;
   allow $1 apc_service:service_manager find;
   allow $1 keystore_service:service_manager find;
   allow $1 legacykeystore_service:service_manager find;
@@ -678,22 +715,18 @@ define(`use_keystore', `
 # use_credstore(domain)
 # Ability to use credstore.
 define(`use_credstore', `
-  allow credstore $1:dir search;
-  allow credstore $1:file { read open };
-  allow credstore $1:process getattr;
   allow $1 credstore_service:service_manager find;
   binder_call($1, credstore)
   binder_call(credstore, $1)
 ')
 
-###########################################
-# use_drmservice(domain)
-# Ability to use DrmService which requires
-# DrmService to call getpidcon.
-define(`use_drmservice', `
-  allow drmserver $1:dir search;
-  allow drmserver $1:file { read open };
-  allow drmserver $1:process getattr;
+#####################################
+# use_omapi(domain)
+# Ability to use omapi.
+define(`use_omapi', `
+  allow $1 omapi_service:service_manager find;
+  binder_call($1, omapi)
+  binder_call(omapi, $1)
 ')
 
 ###########################################
@@ -1066,3 +1099,57 @@ neverallow { domain -$1 } $1_iouring:anon_inode *;
 # grant CAP_IPC_LOCK to silence avc denials, which is undesireable.
 dontaudit $1 self:global_capability_class_set ipc_lock;
 ')
+
+####################################
+# mapper_sphal_use(domain)
+# Allow domain to load mapper SPHAL.
+define(`mapper_sphal_use', `
+typeattribute $1 mapper_sphal_domain;
+')
+
+####################################
+# opengl_sphal_use(domain)
+# Allow domain to load opengl SPHAL.
+define(`opengl_sphal_use', `
+typeattribute $1 opengl_sphal_domain;
+')
+
+####################################
+# vulkan_sphal_use(domain)
+# Allow domain to load vulkan SPHAL.
+define(`vulkan_sphal_use', `
+typeattribute $1 vulkan_sphal_domain;
+')
+
+#####################################
+# set_xperm_filter(target_context, allowed_target, unpriv_ioctls, restricted_ioctls, instrumentation_ioctls)
+# Allow targets to harden their IOCTL interfaces by specifying
+# unprivileged, blocked, and instrumentation-specific IOCTLs for appdomain.
+#
+# Parameters:
+#   target_context: The target context to apply the filter to.
+#   allowed_target: Additional `appdomain` target to exempt from hardened policy.
+#     Allows for an allowlist of services, or gating by a target SDK.
+#   unpriv_ioctls: IOCTLs to allow across appdomain.
+#   restricted_ioctls: IOCTLs to deny across appdomain.
+#   instrumentation_ioctls: IOCTLs intended to be used in development.
+#     IOCTLs will be allowed from `shell` or `debuggable` applications.
+define(`set_xperm_filter', `
+  # Allow unprivileged IOCTLs.
+  allowxperm appdomain $1:chr_file ioctl { $3 };
+  # Disallow restricted IOCTLs. Gate by targetSdkVersion.
+  neverallowxperm { appdomain -$2 } $1:chr_file ioctl { $4 };
+  allowxperm $2 $1:chr_file ioctl { $4 };
+  # Allow instrumentation ioctls when used from shell by
+  # profiling tools, or debuggable applications.
+  # Gate by targetSdkVersion.
+  allowxperm { $2 runas_app shell } $1:chr_file ioctl { $5 };
+  neverallowxperm {
+    appdomain
+    -$2
+    -runas_app
+    -shell
+  } $1:chr_file ioctl { $5 };
+')
+
+divert(0)

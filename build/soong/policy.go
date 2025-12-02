@@ -46,6 +46,8 @@ var policyConfOrder = []string{
 	"te_macros",
 	"ioctl_defines",
 	"ioctl_macros",
+	"nlmsg_defines",
+	"nlmsg_macros",
 	"attributes|*.te",
 	"roles_decl",
 	"roles",
@@ -91,9 +93,13 @@ type policyConfProperties struct {
 	// Desired number of MLS categories. Defaults to 1024
 	Mls_cats *int64
 
-	// Board api level of policy files. Set "vendor" for RELEASE_BOARD_API_LEVEL, "system" for
-	// turning off the guard, or a direct version string (e.g. "202404"). Defaults to "system"
+	// Board api level of policy files. Set "current" for RELEASE_BOARD_API_LEVEL, or a direct
+	// version string (e.g. "202404"). Defaults to "current"
 	Board_api_level *string
+
+	// Leave only neverallow rules and line markers. This minimizes the output conf files used for
+	// neverallow CTS tests. Default is false
+	Only_neverallow_rules *bool
 }
 
 type policyConf struct {
@@ -224,20 +230,6 @@ func (c *policyConf) mlsCats() int {
 	return proptools.IntDefault(c.properties.Mls_cats, MlsCats)
 }
 
-func (c *policyConf) boardApiLevel(ctx android.ModuleContext) string {
-	level := proptools.StringDefault(c.properties.Board_api_level, "system")
-
-	if level == "system" {
-		// aribtrary value greater than any other vendor API levels
-		return "1000000"
-	} else if level == "vendor" {
-		return ctx.Config().VendorApiLevel()
-	} else {
-		return level
-	}
-
-}
-
 func findPolicyConfOrder(name string) int {
 	for idx, pattern := range policyConfOrder {
 		// We could use regexp but it seems like an overkill
@@ -279,11 +271,17 @@ func (c *policyConf) transformPolicyToConf(ctx android.ModuleContext) android.Ou
 		FlagWithArg("-D target_requires_insecure_execmem_for_swiftshader=", strconv.FormatBool(ctx.DeviceConfig().RequiresInsecureExecmemForSwiftshader())).
 		FlagWithArg("-D target_enforce_debugfs_restriction=", c.enforceDebugfsRestrictions(ctx)).
 		FlagWithArg("-D target_recovery=", strconv.FormatBool(c.isTargetRecovery())).
-		FlagWithArg("-D target_board_api_level=", c.boardApiLevel(ctx)).
+		Flag(boardApiLevelToM4Macro(ctx, c.properties.Board_api_level)).
 		Flags(flagsToM4Macros(flags)).
 		Flag("-s").
 		Inputs(srcs).
 		Text("> ").Output(conf)
+
+	if proptools.Bool(c.properties.Only_neverallow_rules) {
+		rule.Command().BuiltTool("sepolicy_filter_neverallow").
+			Text(conf.String()). // input
+			Text(conf.String())  // output (in-place filtering)
+	}
 
 	rule.Build("conf", "Transform policy to conf: "+ctx.ModuleName())
 	return conf
@@ -303,6 +301,10 @@ func (c *policyConf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(c.installPath, c.stem(), c.installSource)
 
 	ctx.SetOutputFiles(android.Paths{c.installSource}, "")
+
+	moduleInfoJSON := ctx.ModuleInfoJSON()
+	moduleInfoJSON.Class = []string{"ETC"}
+	moduleInfoJSON.SystemSharedLibs = []string{"none"}
 }
 
 func (c *policyConf) AndroidMkEntries() []android.AndroidMkEntries {
@@ -337,9 +339,6 @@ type policyCilProperties struct {
 	// Cil files to be filtered out by the filter_out tool of "build_sepolicy". Used to build
 	// exported policies
 	Filter_out []string `android:"path"`
-
-	// Whether to remove line markers (denoted by ;;) out of compiled cil files. Defaults to false
-	Remove_line_marker *bool
 
 	// Whether to run secilc to check compiled policy or not. Defaults to true
 	Secilc_check *bool
@@ -384,6 +383,7 @@ func (c *policyCil) compileConfToCil(ctx android.ModuleContext, conf android.Pat
 	checkpolicyCmd := rule.Command().BuiltTool("checkpolicy").
 		Flag("-C"). // Write CIL
 		Flag("-M"). // Enable MLS
+		Flag("-L"). // Line markers for allow rules
 		FlagWithArg("-c ", strconv.Itoa(PolicyVers)).
 		FlagWithOutput("-o ", cil).
 		Input(conf)
@@ -404,17 +404,6 @@ func (c *policyCil) compileConfToCil(ctx android.ModuleContext, conf android.Pat
 		rule.Command().Text("cat").
 			Inputs(android.PathsForModuleSrc(ctx, c.properties.Additional_cil_files)).
 			Text(">> ").Output(cil)
-	}
-
-	if proptools.Bool(c.properties.Remove_line_marker) {
-		rule.Command().Text("grep -v").
-			Text(proptools.ShellEscape(";;")).
-			Text(cil.String()).
-			Text(">").
-			Text(cil.String() + ".tmp").
-			Text("&& mv").
-			Text(cil.String() + ".tmp").
-			Text(cil.String())
 	}
 
 	if proptools.BoolDefault(c.properties.Secilc_check, true) {
@@ -459,6 +448,10 @@ func (c *policyCil) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(c.installPath, c.stem(), c.installSource)
 
 	ctx.SetOutputFiles(android.Paths{c.installSource}, "")
+
+	moduleInfoJSON := ctx.ModuleInfoJSON()
+	moduleInfoJSON.Class = []string{"ETC"}
+	moduleInfoJSON.SystemSharedLibs = []string{"none"}
 }
 
 func (c *policyCil) AndroidMkEntries() []android.AndroidMkEntries {
@@ -599,6 +592,10 @@ func (c *policyBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(c.installPath, c.stem(), c.installSource)
 
 	ctx.SetOutputFiles(android.Paths{c.installSource}, "")
+
+	moduleInfoJSON := ctx.ModuleInfoJSON()
+	moduleInfoJSON.Class = []string{"ETC"}
+	moduleInfoJSON.SystemSharedLibs = []string{"none"}
 }
 
 func (c *policyBinary) AndroidMkEntries() []android.AndroidMkEntries {

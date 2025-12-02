@@ -47,6 +47,7 @@ userdebug_or_eng(`
   dontaudit su domain:anon_inode *;
   dontaudit su domain:{ process process2 } *;
   dontaudit su domain:fd *;
+  dontaudit su domain:filesystem *;
   dontaudit su domain:dir *;
   dontaudit su domain:lnk_file *;
   dontaudit su domain:{ fifo_file file } *;
@@ -106,6 +107,7 @@ userdebug_or_eng(`
   typeattribute su hal_ir_client;
   typeattribute su hal_keymaster_client;
   typeattribute su hal_light_client;
+  typeattribute su hal_mediaquality_client;
   typeattribute su hal_memtrack_client;
   typeattribute su hal_neuralnetworks_client;
   typeattribute su hal_nfc_client;
@@ -126,6 +128,7 @@ userdebug_or_eng(`
   typeattribute su hal_tv_tuner_client;
   typeattribute su hal_usb_client;
   typeattribute su hal_vibrator_client;
+  typeattribute su hal_vm_capabilities_client;
   typeattribute su hal_vr_client;
   typeattribute su hal_weaver_client;
   typeattribute su hal_wifi_client;

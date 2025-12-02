@@ -63,6 +63,7 @@ dontaudit gmscore_app sysfs_net:dir r_dir_perms;
 dontaudit gmscore_app { wifi_prop wifi_hal_prop }:file r_file_perms;
 dontaudit gmscore_app mirror_data_file:dir search;
 dontaudit gmscore_app mnt_vendor_file:dir search;
+dontaudit gmscore_app system_adbd_prop:file r_file_perms;
 
 # Access the network
 net_domain(gmscore_app)
@@ -112,11 +113,6 @@ allow gmscore_app radio_service:service_manager find;
 allow gmscore_app recovery_service:service_manager find;
 allow gmscore_app stats_service:service_manager find;
 
-# Used by Finsky / Android "Verify Apps" functionality when
-# running "adb install foo.apk".
-allow gmscore_app shell_data_file:file r_file_perms;
-allow gmscore_app shell_data_file:dir r_dir_perms;
-
 # Write to /cache.
 allow gmscore_app { cache_file cache_recovery_file }:dir create_dir_perms;
 allow gmscore_app { cache_file cache_recovery_file }:file create_file_perms;
@@ -137,8 +133,10 @@ allow gmscore_app shell_data_file:file r_file_perms;
 allow gmscore_app shell_data_file:dir r_dir_perms;
 
 # allow gms core app write to aconfigd socket
-allow gmscore_app aconfigd_socket:sock_file {read write};
-allow gmscore_app aconfigd:unix_stream_socket connectto;
+unix_socket_connect(gmscore_app, aconfigd, aconfigd);
+
+# allow gms core app write to aconfigd_mainline socket
+unix_socket_connect(gmscore_app, aconfigd_mainline, aconfigd_mainline);
 
 # b/18504118: Allow reads from /data/anr/traces.txt
 allow gmscore_app anr_data_file:file r_file_perms;
@@ -156,10 +154,22 @@ get_prop(gmscore_app, dck_prop)
 # Allow GMSCore to read RKP properties for the purpose of GTS testing.
 get_prop(gmscore_app, remote_prov_prop)
 
+# Allow GMSCore to check 16k pages developer option status
+get_prop(gmscore_app, enable_16k_pages_prop)
+
 # Allow GmsCore to read Quick Start properties and prevent access from other
 # policies.
 get_prop(gmscore_app, quick_start_prop)
 neverallow { domain -init -dumpstate -vendor_init -gmscore_app } quick_start_prop:file no_rw_file_perms;
+
+# Allow GmsCore to read Bluetotoh Power Off Finder property
+get_prop(gmscore_app, bluetooth_finder_prop)
+
+# Allow GmsCore to read device-specific USB APM properties
+get_prop(system_server, usb_disable_when_locked_prop)
+
+# Allow GmsCore to read le_aduio_allowlist
+get_prop(gmscore_app, bluetooth_lea_prop)
 
 # Do not allow getting permission-protected network information from sysfs.
 neverallow gmscore_app sysfs_net:file *;
@@ -181,3 +191,6 @@ neverallow gmscore_app *:{
   bluetooth_socket iucv_socket rxrpc_socket isdn_socket phonet_socket ieee802154_socket caif_socket
   alg_socket nfc_socket kcm_socket qipcrtr_socket smc_socket xdp_socket
 } *;
+
+# b/432072113: Allow GMSCore to read wallet properties
+get_prop(gmscore_app, wallet_prop)

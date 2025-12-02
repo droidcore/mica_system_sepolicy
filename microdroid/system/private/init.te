@@ -19,6 +19,12 @@ allow init self:perf_event { open cpu };
 allow init self:global_capability2_class_set perfmon;
 dontaudit init self:perf_event { kernel tracepoint read write };
 
+# Allow opening /proc/kallsyms so that on boot, init can create and retain an
+# fd with the full address visibility (which is evaluated on open and persists
+# for the lifetime of the open file description). This fd can then be shared
+# with other privileged processes.
+allow init proc_kallsyms:file r_file_perms;
+
 # Allow init to restore contexts of vd_device(/dev/block/vd[..]) when labeling
 # /dev/block.
 allow init vd_device:blk_file relabelto;
@@ -50,6 +56,10 @@ allow init tmpfs:blk_file getattr;
 allow init block_device:{ dir blk_file lnk_file } relabelto;
 allow init dm_device:{ chr_file blk_file } relabelto;
 allow init dm_user_device:chr_file relabelto;
+# /dev/loop-control
+allow init tmpfs:chr_file relabelfrom;
+allow init loop_control_device:chr_file relabelto;
+
 allow init kernel:fd use;
 # restorecon for early mount device symlinks
 allow init tmpfs:lnk_file { getattr read relabelfrom };
@@ -114,7 +124,6 @@ allow init tmpfs:dir mounton;
 allow init cgroup:dir create_dir_perms;
 allow init cgroup:file rw_file_perms;
 allow init cgroup_desc_file:file r_file_perms;
-allow init cgroup_desc_api_file:file r_file_perms;
 allow init cgroup_v2:dir { mounton create_dir_perms};
 allow init cgroup_v2:file rw_file_perms;
 
@@ -186,6 +195,8 @@ allow init {
 
 allow init tracefs_type:file { create_file_perms relabelfrom };
 
+allow init apex_info_file:file { getattr };
+
 allow init {
   file_type
   -exec_type
@@ -209,6 +220,9 @@ allow init {
   -vendor_file_type
   -exec_type
 }:dir_file_class_set relabelto;
+
+allow init proc:file write;
+allow init sysfs:file { open write };
 
 allow init { sysfs debugfs_tracing debugfs_tracing_debug }:{ dir file lnk_file } { getattr relabelfrom };
 allow init { sysfs_type tracefs_type }:{ dir file lnk_file } { relabelto getattr };
@@ -445,3 +459,7 @@ allow init vendor_kernel_modules:system module_load;
 allow init tmpfs:chr_file relabelfrom;
 allow init kmsg_device:chr_file { getattr write relabelto };
 allow init kmsg_debug_device:chr_file { open write relabelto };
+
+# For pageout_bomb.rc.
+allow init proc_drop_caches:file w_file_perms;
+allow init proc_compact_memory:file w_file_perms;

@@ -59,6 +59,9 @@ set_prop(init, powerctl_prop)
 
 set_prop(init, userspace_reboot_exported_prop)
 
+# Allow the media variant properties to be set in init.
+set_prop(init, media_variant_prop)
+
 # Second-stage init performs a test for whether the kernel has SELinux hooks
 # for the perf_event_open() syscall. This is done by testing for the syscall
 # outcomes corresponding to this policy.
@@ -67,6 +70,12 @@ set_prop(init, userspace_reboot_exported_prop)
 # and 4.9).
 allow init self:perf_event { open cpu };
 allow init self:global_capability2_class_set perfmon;
+
+# Allow opening /proc/kallsyms so that on boot, init can create and retain an
+# fd with the full address visibility (which is evaluated on open and persists
+# for the lifetime of the open file description). This fd can then be shared
+# with other privileged processes.
+allow init proc_kallsyms:file r_file_perms;
 
 # Allow init to communicate with snapuserd to transition Virtual A/B devices
 # from the first-stage daemon to the second-stage.
@@ -81,6 +90,14 @@ allow init vd_device:blk_file relabelto;
 
 set_prop(init, init_perf_lsm_hooks_prop)
 set_prop(init, vts_status_prop)
+
+# Allow init to set 16kb app compatibility props
+set_prop(init, bionic_linker_16kb_app_compat_prop)
+set_prop(init, pm_16kb_app_compat_prop)
+
+
+# Allow init to set/get prefetch boot prop to initiate record/replay
+set_prop(init, ctl_prefetch_prop);
 
 # Allow accessing /sys/kernel/tracing/instances/bootreceiver to set up tracing.
 allow init debugfs_bootreceiver_tracing:file w_file_perms;
@@ -146,6 +163,10 @@ allow init tmpfs:blk_file getattr;
 allow init block_device:{ dir blk_file lnk_file } relabelto;
 allow init dm_device:{ chr_file blk_file } relabelto;
 allow init dm_user_device:chr_file relabelto;
+# /dev/loop-control
+allow init tmpfs:chr_file relabelfrom;
+allow init loop_control_device:chr_file relabelto;
+
 allow init kernel:fd use;
 # restorecon for early mount device symlinks
 allow init tmpfs:lnk_file { getattr read relabelfrom };
@@ -234,7 +255,6 @@ allow init cgroup:dir create_dir_perms;
 allow init cgroup:file rw_file_perms;
 allow init cgroup_rc_file:file rw_file_perms;
 allow init cgroup_desc_file:file r_file_perms;
-allow init cgroup_desc_api_file:file r_file_perms;
 allow init vendor_cgroup_desc_file:file r_file_perms;
 allow init cgroup_v2:dir { mounton create_dir_perms};
 allow init cgroup_v2:file rw_file_perms;
@@ -271,7 +291,7 @@ allowxperm init system_data_root_file:dir ioctl F2FS_IOC_SHUTDOWN;
 allow init {
   fs_type
   enforce_debugfs_restriction(`-debugfs_type')
-}:filesystem ~relabelto;
+}:filesystem ~{ relabelto associate };
 
 # Allow init to mount/unmount debugfs in non-user builds.
 enforce_debugfs_restriction(`
@@ -462,6 +482,7 @@ allow init debugfs_tracing:file w_file_perms;
 allow init debugfs_tracing_instances:dir create_dir_perms;
 allow init debugfs_tracing_instances:file w_file_perms;
 allow init debugfs_wifi_tracing:file w_file_perms;
+allow init debugfs_wifi_tracing:dir create_dir_perms;
 
 # chown/chmod on pseudo files.
 allow init {
@@ -525,6 +546,7 @@ userdebug_or_eng(`
 
 allow init {
   proc # b/67049235 processes /proc/<pid>/* files are mislabeled.
+  proc_allocinfo
   proc_bootconfig
   proc_cmdline
   proc_diskstats
@@ -560,6 +582,7 @@ allow init {
 
 # init chmod/chown access to /proc files.
 allow init {
+  proc_allocinfo
   proc_cmdline
   proc_bootconfig
   proc_kmsg
@@ -613,6 +636,7 @@ allow init sysfs_vibrator:file w_file_perms;
 allow init {
   sysfs_android_usb
   sysfs_devices_system_cpu
+  sysfs_firmware_acpi_tables
   sysfs_ipv4
   sysfs_leds
   sysfs_lowmemorykiller
@@ -698,7 +722,14 @@ allow init property_type:property_service set;
 # Send an SELinux userspace denial to the kernel audit subsystem,
 # so it can be picked up and processed by logd. These denials are
 # generated when an attempt to set a property is denied by policy.
-allow init self:netlink_audit_socket { create_socket_perms_no_ioctl nlmsg_relay };
+allow init self:netlink_audit_socket create_socket_perms_no_ioctl;
+
+# For kernel < 6.13
+allow init self:netlink_audit_socket nlmsg_relay;
+# For kernel >= 6.13
+allow init self:netlink_audit_socket nlmsg;
+allowxperm init self:netlink_audit_socket nlmsg AUDIT_USER_AVC;
+
 allow init self:global_capability_class_set audit_write;
 
 # Run "ifup lo" to bring up the localhost interface
@@ -714,6 +745,8 @@ allow init kernel:process { getsched setsched };
 # swapon() needs write access to swap device
 # system/core/fs_mgr/fs_mgr.c - fs_mgr_swapon_all
 allow init swap_block_device:blk_file rw_file_perms;
+# Allow to change group owner and permissions for new swap setup in mmd
+allow init swap_block_device:blk_file setattr;
 
 # Create and access /dev files without a specific type,
 # e.g. /dev/.coldboot_done, /dev/.booting
@@ -788,6 +821,9 @@ allow init userdata_sysdev:file create_file_perms;
 # allow disk tuning
 allow init rootdisk_sysdev:file create_file_perms;
 
+# Allow updating the trade-in mode wipe indicator.
+allow init tradeinmode_metadata_file:file rw_file_perms;
+
 ###
 ### neverallow rules
 ###
@@ -795,7 +831,7 @@ allow init rootdisk_sysdev:file create_file_perms;
 # The init domain is only entered via an exec based transition from the
 # kernel domain, never via setcon().
 neverallow domain init:process dyntransition;
-neverallow { domain -kernel } init:process transition;
+neverallow { domain -kernel userdebug_or_eng(`-overlay_remounter') } init:process transition;
 neverallow init { file_type fs_type -init_exec }:file entrypoint;
 
 # Never read/follow symlinks created by shell or untrusted apps.
@@ -831,7 +867,8 @@ neverallow * init:process ptrace;
 # init owns the root of /data
 # TODO(b/140259336) We want to remove vendor_init
 # TODO(b/141108496) We want to remove toolbox
-neverallow { domain -init -toolbox -vendor_init -vold } system_data_root_file:dir { write add_name remove_name };
+neverallow { domain -init -toolbox -vendor_init -vold } system_data_root_file:dir add_name;
+neverallow { domain -init -toolbox -vendor_init -vold -userdata_alias_remove } system_data_root_file:dir { write remove_name };
 
 # Only init is allowed to set userspace reboot related properties.
 neverallow { domain -init } userspace_reboot_exported_prop:property_service set;
@@ -857,3 +894,6 @@ neverallow { domain -init } property_service_version_prop:property_service set;
 
 # Only init can set keystore.boot_level
 neverallow { domain -init } keystore_listen_prop:property_service set;
+
+# Only init can set ro.init.mnt_ns.count
+neverallow { domain -init } init_mnt_ns_prop:property_service set;

@@ -68,6 +68,11 @@ se_build_files {
     srcs: ["vndservice_contexts"],
 }
 
+se_build_files {
+    name: "tee_service_contexts_files",
+    srcs: ["tee_service_contexts"],
+}
+
 file_contexts {
     name: "plat_file_contexts",
     defaults: ["contexts_flags_defaults"],
@@ -80,6 +85,11 @@ file_contexts {
             srcs: [":file_contexts_overlayfs_files{.plat_private}"],
         },
     },
+}
+
+filegroup {
+    name: "plat_file_contexts_test_data",
+    srcs: ["file_contexts_test_data"],
 }
 
 file_contexts {
@@ -206,6 +216,18 @@ hwservice_contexts {
     device_specific: true,
 }
 
+hwservice_contexts {
+    name: "merged_hwservice_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [
+        ":plat_hwservice_contexts",
+        ":system_ext_hwservice_contexts",
+        ":product_hwservice_contexts",
+        ":vendor_hwservice_contexts",
+        ":odm_hwservice_contexts",
+    ],
+}
+
 property_contexts {
     name: "plat_property_contexts",
     defaults: ["contexts_flags_defaults"],
@@ -225,7 +247,14 @@ property_contexts {
     defaults: ["contexts_flags_defaults"],
     srcs: [":property_contexts_files{.system_ext_private}"],
     system_ext_specific: true,
-    recovery_available: true,
+}
+
+property_contexts {
+    name: "system_ext_property_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":property_contexts_files{.system_ext_private}"],
+    recovery: true,
+    stem: "system_ext_property_contexts",
 }
 
 property_contexts {
@@ -233,7 +262,14 @@ property_contexts {
     defaults: ["contexts_flags_defaults"],
     srcs: [":property_contexts_files{.product_private}"],
     product_specific: true,
-    recovery_available: true,
+}
+
+property_contexts {
+    name: "product_property_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":property_contexts_files{.product_private}"],
+    recovery: true,
+    stem: "product_property_contexts",
 }
 
 property_contexts {
@@ -245,7 +281,18 @@ property_contexts {
         ":property_contexts_files{.reqd_mask}",
     ],
     soc_specific: true,
-    recovery_available: true,
+}
+
+property_contexts {
+    name: "vendor_property_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [
+        ":property_contexts_files{.plat_vendor}",
+        ":property_contexts_files{.vendor}",
+        ":property_contexts_files{.reqd_mask}",
+    ],
+    recovery: true,
+    stem: "vendor_property_contexts",
 }
 
 property_contexts {
@@ -253,7 +300,14 @@ property_contexts {
     defaults: ["contexts_flags_defaults"],
     srcs: [":property_contexts_files{.odm}"],
     device_specific: true,
-    recovery_available: true,
+}
+
+property_contexts {
+    name: "odm_property_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":property_contexts_files{.odm}"],
+    recovery: true,
+    stem: "odm_property_contexts",
 }
 
 service_contexts {
@@ -275,7 +329,14 @@ service_contexts {
     defaults: ["contexts_flags_defaults"],
     srcs: [":service_contexts_files{.system_ext_private}"],
     system_ext_specific: true,
-    recovery_available: true,
+}
+
+service_contexts {
+    name: "system_ext_service_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":service_contexts_files{.system_ext_private}"],
+    recovery: true,
+    stem: "system_ext_service_contexts",
 }
 
 service_contexts {
@@ -283,7 +344,14 @@ service_contexts {
     defaults: ["contexts_flags_defaults"],
     srcs: [":service_contexts_files{.product_private}"],
     product_specific: true,
-    recovery_available: true,
+}
+
+service_contexts {
+    name: "product_service_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":service_contexts_files{.product_private}"],
+    recovery: true,
+    stem: "product_service_contexts",
 }
 
 service_contexts {
@@ -295,7 +363,18 @@ service_contexts {
         ":service_contexts_files{.reqd_mask}",
     ],
     soc_specific: true,
-    recovery_available: true,
+}
+
+service_contexts {
+    name: "vendor_service_contexts.recovery",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [
+        ":service_contexts_files{.plat_vendor}",
+        ":service_contexts_files{.vendor}",
+        ":service_contexts_files{.reqd_mask}",
+    ],
+    recovery: true,
+    stem: "vendor_service_contexts",
 }
 
 service_contexts {
@@ -306,6 +385,18 @@ service_contexts {
     ],
     device_specific: true,
     recovery_available: true,
+}
+
+service_contexts {
+    name: "merged_service_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [
+        ":plat_service_contexts",
+        ":system_ext_service_contexts",
+        ":product_service_contexts",
+        ":vendor_service_contexts",
+        ":odm_service_contexts",
+    ],
 }
 
 keystore2_key_contexts {
@@ -339,11 +430,20 @@ keystore2_key_contexts {
     soc_specific: true,
 }
 
+se_policy_binary {
+    name: "plat_precompiled_sepolicy",
+    srcs: [":plat_sepolicy.cil"],
+    installable: false,
+}
+
+// Use plat_precompiled_sepolicy instead of precompiled_sepolicy because
+// plat_seapp_contexts must be generic and cannot depend on other partitions
+// than system
 seapp_contexts {
     name: "plat_seapp_contexts",
     defaults: ["contexts_flags_defaults"],
     srcs: [":seapp_contexts_files{.plat_private}"],
-    sepolicy: ":precompiled_sepolicy",
+    sepolicy: ":plat_precompiled_sepolicy",
 }
 
 seapp_contexts {
@@ -433,7 +533,7 @@ file_contexts_test {
 file_contexts_test {
     name: "plat_file_contexts_data_test",
     srcs: [":file_contexts_files{.plat_private}"],
-    test_data: "plat_file_contexts_test",
+    test_data: "file_contexts_test_data",
 }
 
 file_contexts_test {
@@ -487,6 +587,12 @@ hwservice_contexts_test {
 hwservice_contexts_test {
     name: "odm_hwservice_contexts_test",
     srcs: [":odm_hwservice_contexts"],
+    sepolicy: ":precompiled_sepolicy",
+}
+
+hwservice_contexts_test {
+    name: "merged_hwservice_contexts_test",
+    srcs: [":merged_hwservice_contexts"],
     sepolicy: ":precompiled_sepolicy",
 }
 
@@ -568,6 +674,12 @@ service_contexts_test {
     sepolicy: ":precompiled_sepolicy",
 }
 
+service_contexts_test {
+    name: "merged_service_contexts_test",
+    srcs: [":merged_service_contexts"],
+    sepolicy: ":precompiled_sepolicy",
+}
+
 vndservice_contexts_test {
     name: "vndservice_contexts_test",
     srcs: [":vndservice_contexts"],
@@ -577,4 +689,35 @@ vndservice_contexts_test {
 fuzzer_bindings_test {
     name: "fuzzer_bindings_test",
     srcs: [":plat_service_contexts"],
+}
+
+tee_service_contexts {
+    name: "plat_tee_service_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":tee_service_contexts_files{.plat_private}"],
+}
+
+tee_service_contexts {
+    name: "system_ext_tee_service_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":tee_service_contexts_files{.system_ext_private}"],
+    system_ext_specific: true,
+}
+
+tee_service_contexts {
+    name: "product_tee_service_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [":tee_service_contexts_files{.product_private}"],
+    product_specific: true,
+}
+
+tee_service_contexts {
+    name: "vendor_tee_service_contexts",
+    defaults: ["contexts_flags_defaults"],
+    srcs: [
+        ":tee_service_contexts_files{.plat_vendor}",
+        ":tee_service_contexts_files{.vendor}",
+        ":tee_service_contexts_files{.reqd_mask}",
+    ],
+    soc_specific: true,
 }

@@ -47,6 +47,7 @@
     hal_tv_hdmi_earc_service
     hal_wifi_service
     healthconnect_service
+    hidraw_device
     hypervisor_restricted_prop
     isolated_compute_app
     keystore_config_prop
@@ -80,7 +81,9 @@
     ublk_control_device
     usb_uvc_enabled_prop
     virtual_face_hal_prop
+    virtual_face_prop
     virtual_fingerprint_hal_prop
+    virtual_fingerprint_prop
     hal_gatekeeper_service
     hal_broadcastradio_service
     hal_confirmationui_service

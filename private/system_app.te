@@ -60,6 +60,9 @@ auditallow system_app usb_prop:property_service set;
 # Allow Settings to enable Dynamic System Update
 set_prop(system_app, dynamic_system_prop)
 
+# Allow Settings to access le audio property
+set_prop(system_app, bluetooth_lea_prop)
+
 # ctl interface
 set_prop(system_app, ctl_default_prop)
 set_prop(system_app, ctl_bugreport_prop)
@@ -69,6 +72,9 @@ get_prop(system_app, gsid_prop)
 
 # Allow developer settings to check 16k pages boot option status
 get_prop(system_app, enable_16k_pages_prop)
+
+# Allow developer settings to check virtualization capabilities
+get_prop(system_app, hypervisor_prop)
 
 # Create /data/anr/traces.txt.
 allow system_app anr_data_file:dir ra_dir_perms;
@@ -151,7 +157,7 @@ allow system_app {
   proc_version
 }:file r_file_perms;
 
-# Settings app writes to /dev/stune/foreground/tasks.
+# Allow system apps to modify cgroup attributes and migrate processes
 allow system_app cgroup:file w_file_perms;
 allow system_app cgroup_v2:file w_file_perms;
 allow system_app cgroup_v2:dir w_dir_perms;
@@ -199,3 +205,7 @@ neverallow { domain -init -system_app } drm_forcel3_prop:property_service set;
 
 allow system_app vendor_boot_ota_file:dir { r_dir_perms };
 allow system_app vendor_boot_ota_file:file { r_file_perms };
+
+# allow system_app to read system_dlkm_file for /system_dlkm/etc/NOTICE.xml.gz
+allow system_app system_dlkm_file:dir search;
+allow system_app system_dlkm_file:file { getattr open read };

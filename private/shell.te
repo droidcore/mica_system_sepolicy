@@ -42,6 +42,9 @@ perfetto_producer(shell)
 
 domain_auto_trans(shell, vendor_shell_exec, vendor_shell)
 
+# Allow shell to execute tradeinmode for testing.
+domain_auto_trans(shell, tradeinmode_exec, tradeinmode)
+
 # Allow shell binaries to exec the perfetto cmdline util and have that
 # transition into its own domain, so that it behaves consistently to
 # when exec()-d by statsd.
@@ -64,6 +67,9 @@ allow shell perfetto_traces_data_file:file { r_file_perms unlink };
 # ... and /data/misc/perfetto-traces/bugreport/ .
 allow shell perfetto_traces_bugreport_data_file:dir rw_dir_perms;
 allow shell perfetto_traces_bugreport_data_file:file { r_file_perms unlink };
+# ... and /data/misc/perfetto-traces/profiling/ .
+allow shell perfetto_traces_profiling_data_file:dir rw_dir_perms;
+allow shell perfetto_traces_profiling_data_file:file { r_file_perms unlink };
 
 # Allow shell to create/remove configs stored in /data/misc/perfetto-configs.
 allow shell perfetto_configs_data_file:dir rw_dir_perms;
@@ -108,6 +114,15 @@ set_prop(shell, rollback_test_prop)
 # Allow shell to set RKP properties for testing purposes
 set_prop(shell, remote_prov_prop)
 
+# Allow shell to enable 16 KB backcompat globally.
+set_prop(shell, bionic_linker_16kb_app_compat_prop)
+
+# Allow shell to disable compat in package manager
+set_prop(shell, pm_16kb_app_compat_prop)
+
+# Allow shell to set the system property for HSUM boot strategy.
+set_prop(shell, hsum_boot_strategy_prop)
+
 # Allow shell to get encryption policy of /data/local/tmp/, for CTS
 allowxperm shell shell_data_file:dir ioctl {
   FS_IOC_GET_ENCRYPTION_POLICY
@@ -133,7 +148,10 @@ allow shell remount_exec:file rx_file_perms;
 
 # Allow shell to call perf_event_open for profiling other shell processes, but
 # not the whole system.
-allow shell self:perf_event { open read write kernel };
+allow shell self:perf_event { open read write };
+
+# Allow shell to read ETM perf event type.
+r_dir_file(shell, sysfs_devices_cs_etm)
 
 # Allow shell to read microdroid vendor image
 r_dir_file(shell, vendor_microdroid_file)
@@ -177,6 +195,8 @@ set_prop(shell, traced_perf_enabled_prop)
 # Allow shell to start/stop gsid via ctl.start|stop|restart gsid.
 set_prop(shell, ctl_gsid_prop)
 set_prop(shell, ctl_snapuserd_prop)
+# Allow shell to start/stop prefetch
+set_prop(shell, ctl_prefetch_prop)
 # Allow shell to enable Dynamic System Update
 set_prop(shell, dynamic_system_prop)
 # Allow shell to mock an OTA using persist.pm.mock-upgrade
@@ -224,9 +244,11 @@ allow shell keystore2_key_contexts_file:file r_file_perms;
 # Allow shell to access the keystore2_key namespace shell_key. Mainly used for native tests.
 allow shell shell_key:keystore2_key { delete rebind use get_info update };
 
-# Allow shell to open and execute memfd files for minijail unit tests.
+# Allow shell to open memfd descriptors via /proc/self/fd/NUM
+# This is used by "atest art_standalone_artd_tests" (b/303909581#comment4)
+# As this is test-only functionality, limit the use to debuggable builds
 userdebug_or_eng(`
-  allow shell appdomain_tmpfs:file { open execute_no_trans };
+  allow shell appdomain_tmpfs:file open;
 ')
 
 # Allow shell to write db.log.detailed, db.log.slow_query_threshold*
@@ -272,12 +294,6 @@ get_prop(shell, build_attestation_prop)
 # Allow shell to execute oatdump.
 # TODO (b/350628688): Remove this once it's safe to do so.
 allow shell oatdump_exec:file rx_file_perms;
-
-# Allow shell access to socket for test
-userdebug_or_eng(`
-    allow shell aconfigd_socket:sock_file write;
-    allow shell aconfigd:unix_stream_socket connectto;
-')
 
 # Create and use network sockets.
 net_domain(shell)
@@ -356,6 +372,9 @@ allow shell {
   -apex_service
   -dnsresolver_service
   -gatekeeper_service
+starting_at_board_api(202604, `
+  -hal_frp_service
+')
   -hal_keymint_service
   -hal_secureclock_service
   -hal_sharedsecret_service
@@ -383,12 +402,14 @@ r_dir_file(shell, proc_net_type)
 allow shell {
   proc_asound
   proc_cgroups
+  proc_diskstats
   proc_filesystems
   proc_interrupts
   proc_loadavg # b/124024827
   proc_meminfo
   proc_modules
   proc_pid_max
+  proc_pressure_io
   proc_slabinfo
   proc_stat
   proc_timer
@@ -403,7 +424,6 @@ allow shell sysfs_net:dir r_dir_perms;
 
 r_dir_file(shell, cgroup)
 allow shell cgroup_desc_file:file r_file_perms;
-allow shell cgroup_desc_api_file:file r_file_perms;
 allow shell vendor_cgroup_desc_file:file r_file_perms;
 r_dir_file(shell, cgroup_v2)
 allow shell domain:dir { search open read getattr };
@@ -439,6 +459,9 @@ allow shell sysfs_batteryinfo:file r_file_perms;
 
 # Allow reads (but not writes) of the MGLRU state
 allow shell sysfs_lru_gen_enabled:file r_file_perms;
+
+# Allow reads (but not writes) of mem_sleep to determine suspend mechanism
+allow shell sysfs_mem_sleep:file r_file_perms;
 
 # Allow communicating with the VM terminal.
 userdebug_or_eng(`
@@ -479,8 +502,11 @@ allow shell sepolicy_file:file r_file_perms;
 allow shell vendor_shell_exec:file rx_file_perms;
 
 is_flag_enabled(RELEASE_AVF_SUPPORT_CUSTOM_VM_WITH_PARAVIRTUALIZED_DEVICES, `
-  allow shell custom_vm_setup_exec:file { entrypoint r_file_perms };
+  allow shell linux_vm_setup_exec:file { entrypoint r_file_perms };
 ')
+
+allow shell tee_service_contexts_file:file r_file_perms;
+allow shell test_pkvm_tee_service:tee_service use;
 
 # Everything is labeled as rootfs in recovery mode. Allow shell to
 # execute them.
@@ -495,6 +521,9 @@ recovery_only(`
 # Do not allow shell to talk directly to security HAL services other than
 # hal_remotelyprovisionedcomponent_service
 neverallow shell {
+starting_at_board_api(202604, `
+  hal_frp_service
+')
   hal_keymint_service
   hal_secureclock_service
   hal_sharedsecret_service
@@ -537,3 +566,94 @@ neverallow shell self:perf_event ~{ open read write kernel };
 # Never allow others to set or get the perf.drop_caches property.
 neverallow { domain -shell -init } perf_drop_caches_prop:property_service set;
 neverallow { domain -shell -init -dumpstate } perf_drop_caches_prop:file read;
+
+# /data/local/tmp symlink following vulnerabilities were common
+# in the early days of Android, but have largely gone away with the
+# introduction of SELinux. Prevent domains from following /data/local/tmp
+# symlinks to avoid this class of problems in the future.
+neverallow {
+  domain
+  -shell
+  userdebug_or_eng(`-uncrypt')
+  -installd
+} shell_data_file:lnk_file read;
+
+# Restrict direct access to shell owned files. The /data/local/tmp directory is
+# untrustworthy, and non-allowed domains should not be trusting any content in
+# those directories. We allow shell files to be passed around by file
+# descriptor, but not directly opened.
+# artd doesn't need to access /data/local/tmp, but it needs to access
+# /data/{user,user_de}/<user-id>/com.android.shell/... for compiling secondary
+# dex files.
+neverallow {
+  domain
+  -adbd
+  -appdomain
+  -artd
+  -dumpstate
+  -installd
+  userdebug_or_eng(`-uncrypt')
+  userdebug_or_eng(`-virtualizationmanager')
+  userdebug_or_eng(`-virtualizationservice')
+  userdebug_or_eng(`-crosvm')
+} shell_data_file:file open;
+
+# In addition to the symlink reading restrictions above, restrict
+# write access to shell owned directories. The /data/local/tmp
+# directory is untrustworthy, and non-allowed domains should
+# not be trusting any content in those directories.
+# artd doesn't need to access /data/local/tmp, but it needs to access
+# /data/{user,user_de}/<user-id>/com.android.shell/... for compiling secondary
+# dex files.
+neverallow {
+  domain
+  -adbd
+  -artd
+  -dumpstate
+  -installd
+  -init
+  -shell
+  -vold
+} shell_data_file:dir no_w_dir_perms;
+
+# Restrict direct open access to shell owned directories. This ensures that
+# only allow-listed domains can list out the contents of the /data/local/tmp
+# directories. The /data/local/tmp directory contains untrusted content and
+# we do not want privileged components depending on this directory.
+neverallow {
+  domain
+  -adbd
+  -appdomain
+  -artd
+  -dumpstate
+  -init
+  -installd
+  -simpleperf_app_runner
+  -system_server # why?
+  userdebug_or_eng(`-uncrypt')
+} shell_data_file:dir open;
+
+# Restrict search access to /data/local/tmp directories. This ensures that
+# only allow-listed domains can pass through the /data/local/tmp directory
+# to access files. The /data/local/tmp diectory contains untrusted content
+# and we do not want privileged components depending on this directory.
+neverallow {
+  domain
+  -adbd
+  -appdomain
+  -artd
+  -dumpstate
+  -init
+  -installd
+  -simpleperf_app_runner
+  -system_server # why?
+  userdebug_or_eng(`-uncrypt')
+  userdebug_or_eng(`-virtualizationmanager')
+  userdebug_or_eng(`-crosvm')
+} shell_data_file:dir search;
+
+# Restrict execute from /data/local/tmp directories. This directory contains
+# untrusted content from the adb shell user, and only the shell user should
+# be able to execute such content. Allowing other domains to execute this
+# content would be a privilege escalation vulnerability.
+neverallow { domain -shell } shell_data_file:file no_x_file_perms;
